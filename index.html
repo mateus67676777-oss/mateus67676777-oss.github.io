@@ -5,24 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Boneco de pontos</title>
 <style>
-  :root { --palco:#000; --corpo:#f2f2f2; --dedos:#ffc94d; --botao:#ffffff; --texto-botao:#111; }
+  :root { --palco:#000; --corpo:#f2f2f2; --dedos:#ffc94d; --luva:#d62828; --botao:#ffffff; --texto-botao:#111; }
   html, body { margin:0; height:100%; background:var(--palco); color:#fff; font-family: system-ui, sans-serif; overflow:hidden; }
   #video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); opacity:.35; }
   #video.escondido { opacity:0; }
   #tela { position:absolute; inset:0; width:100%; height:100%; }
-  #msg { position:absolute; left:16px; right:16px; top:calc(16px + env(safe-area-inset-top, 0px)); font-size:18px; line-height:1.35; }
-  #barra { position:absolute; left:0; right:0; bottom:0; display:flex; gap:12px; justify-content:center; padding:16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
-  button { font:inherit; font-size:18px; font-weight:600; border:0; border-radius:14px; padding:16px 22px; background:var(--botao); color:var(--texto-botao); }
+  #hud { position:absolute; left:16px; right:16px; top:calc(12px + env(safe-area-inset-top, 0px)); display:flex; justify-content:space-between; font-size:30px; font-weight:700; }
+  #msg { position:absolute; left:16px; right:16px; top:calc(60px + env(safe-area-inset-top, 0px)); font-size:17px; line-height:1.35; }
+  #barra { position:absolute; left:0; right:0; bottom:0; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:12px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  button { font:inherit; font-size:16px; font-weight:600; border:0; border-radius:14px; padding:13px 16px; background:var(--botao); color:var(--texto-botao); }
   button.sec { background:#2b2b2b; color:#fff; }
+  button.luta { background:var(--luva); color:#fff; }
   button:focus-visible { outline:3px solid var(--dedos); outline-offset:2px; }
+  .oculto { display:none; }
 </style>
 </head>
 <body>
 <video id="video" playsinline muted></video>
 <canvas id="tela"></canvas>
-<div id="msg">Toque em Ativar câmera e fique de corpo inteiro na frente do celular.</div>
+<div id="hud"><span id="relogio"></span><span id="placar"></span></div>
+<div id="msg">Toque em Ativar câmera e fique de corpo inteiro, a uns 2 metros do celular.</div>
 <div id="barra">
   <button id="liga">Ativar câmera</button>
+  <button id="modo" class="sec">Modo: Luta</button>
+  <button id="comecar" class="luta">Começar luta</button>
+  <button id="forca" class="sec">Força: Normal</button>
   <button id="fundo" class="sec">Fundo: câmera</button>
 </div>
 
@@ -31,34 +38,72 @@ import { PoseLandmarker, HandLandmarker, FilesetResolver }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
 const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
-const POSE_MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const POSE_MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task";
 const HAND_MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
-const video = document.getElementById("video");
-const tela = document.getElementById("tela");
-const ctx = tela.getContext("2d");
-const msg = document.getElementById("msg");
-const liga = document.getElementById("liga");
-const fundo = document.getElementById("fundo");
+const $ = id => document.getElementById(id);
+const video = $("video"), tela = $("tela"), ctx = tela.getContext("2d");
+const msg = $("msg"), liga = $("liga"), fundo = $("fundo"), modoBtn = $("modo");
+const comecarBtn = $("comecar"), forcaBtn = $("forca"), relogio = $("relogio"), placar = $("placar");
 
 let pose, maos, stream, rodando = false, ultimoTempo = -1;
+let modo = "luta";                       // "luta" ou "boneco"
+const FORCAS = [["Fácil", 2.0], ["Normal", 3.0], ["Difícil", 4.2]];
+let forca = 1;
 
+// ---------- jogo ----------
+const jogo = { estado: "parado", tempo: 30, score: 0, combo: 0, ultimoHit: 0, melhor: 0 };
+try { jogo.melhor = Number(localStorage.getItem("melhorSoco") || 0); } catch (e) {}
+const saco = { ang: 0, vel: 0 };
+const luvas = [ {id:"E", ids:[15,17,19,21]}, {id:"D", ids:[16,18,20,22]} ];
+const textos = [];
+let audio;
+
+function som(f) {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime;
+    o.type = "square"; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+    g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    o.connect(g); g.connect(audio.destination); o.start(); o.stop(t + 0.15);
+  } catch (e) {}
+}
+
+// ---------- corpo suavizado ----------
+const pts = [];
 const OSSOS = [
   [11,12],[11,13],[13,15],[12,14],[14,16],
   [11,23],[12,24],[23,24],
   [23,25],[25,27],[27,29],[27,31],[29,31],
   [24,26],[26,28],[28,30],[28,32],[30,32]
 ];
-const PONTOS_CORPO = [11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32];
+const PONTOS_CORPO = [11,12,13,14,23,24,25,26,27,28,29,30,31,32];
 const DEDOS = [
   [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
   [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]
 ];
+let maosAtuais = [], maosIdade = 99;
+const ok = i => pts[i] && pts[i].miss < 12;
 
+function atualizaPose(res) {
+  const lm = res.landmarks && res.landmarks[0];
+  if (!lm) { for (const p of pts) if (p) p.miss++; return false; }
+  lm.forEach((l, i) => {
+    const v = l.visibility == null ? 1 : l.visibility;
+    const p = pts[i];
+    if (!p) { pts[i] = { x:l.x, y:l.y, z:l.z, v, miss:0 }; return; }
+    if (v < 0.35) { p.miss++; p.v = v; return; }       // ponto duvidoso: segura a última posição
+    if (p.miss >= 12) { p.x = l.x; p.y = l.y; p.z = l.z; }
+    else { const a = 0.6; p.x += (l.x - p.x) * a; p.y += (l.y - p.y) * a; p.z += (l.z - p.z) * a; }
+    p.v = v; p.miss = 0;
+  });
+  return true;
+}
+
+// ---------- tela ----------
 function ajustaTela() {
   const d = window.devicePixelRatio || 1;
-  tela.width = innerWidth * d;
-  tela.height = innerHeight * d;
+  tela.width = innerWidth * d; tela.height = innerHeight * d;
   ctx.setTransform(d, 0, 0, d, 0, 0);
 }
 addEventListener("resize", ajustaTela);
@@ -66,69 +111,207 @@ ajustaTela();
 
 function mapa() {
   const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
   const W = innerWidth, H = innerHeight;
   const s = Math.max(W / vw, H / vh);
   const ox = (W - vw * s) / 2, oy = (H - vh * s) / 2;
-  return p => [ox + (1 - p.x) * vw * s, oy + p.y * vh * s, s * vw];
+  return p => [ox + (1 - p.x) * vw * s, oy + p.y * vh * s];
 }
-
 function linha(a, b, cor, larg) {
   ctx.strokeStyle = cor; ctx.lineWidth = larg; ctx.lineCap = "round";
   ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
 }
-function ponto(p, cor, r) {
-  ctx.fillStyle = cor; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill();
+function ponto(p, cor, r) { ctx.fillStyle = cor; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill(); }
+const cor = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ---------- saco de pancada ----------
+function geoSaco() {
+  const W = innerWidth, H = innerHeight;
+  const bw = Math.min(W * 0.14, 70), bh = bw * 1.7;
+  const px = W / 2, py = H * 0.03, L = H * 0.36;
+  const cx = px + Math.sin(saco.ang) * L, cy = py + Math.cos(saco.ang) * L;
+  return { bw, bh, px, py, cx, cy, raio: bw * 1.7 };
+}
+function desenhaSaco() {
+  const g = geoSaco();
+  linha([g.px, g.py], [g.cx, g.cy - g.bh], "#bbb", 3);
+  ctx.save();
+  ctx.translate(g.cx, g.cy); ctx.rotate(saco.ang * 0.6);
+  ctx.fillStyle = "#8d5a2b"; ctx.strokeStyle = "#3b2410"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.roundRect(-g.bw, -g.bh, g.bw * 2, g.bh * 2, g.bw * 0.6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "rgba(0,0,0,.25)";
+  ctx.fillRect(-g.bw, -g.bh * 0.25, g.bw * 2, g.bh * 0.12);
+  ctx.fillRect(-g.bw, g.bh * 0.35, g.bw * 2, g.bh * 0.12);
+  ctx.restore();
 }
 
-function desenha(resPose, resMaos) {
-  ctx.clearRect(0, 0, innerWidth, innerHeight);
-  const m = mapa();
-  const corpo = getComputedStyle(document.documentElement).getPropertyValue("--corpo").trim();
-  const dedos = getComputedStyle(document.documentElement).getPropertyValue("--dedos").trim();
+// ---------- luvas ----------
+function centroLuva(l) {
+  if (!ok(l.ids[0])) return null;
+  let x = 0, y = 0, z = 0, n = 0;
+  for (const i of l.ids) if (ok(i)) { x += pts[i].x; y += pts[i].y; z += pts[i].z; n++; }
+  return { x: x / n, y: y / n, z: z / n };
+}
+function larguraOmbros() {
+  if (!ok(11) || !ok(12)) return 0.25;
+  return Math.max(0.08, Math.hypot(pts[11].x - pts[12].x, pts[11].y - pts[12].y));
+}
+function atualizaLuvas(t) {
+  const sw = larguraOmbros();
+  for (const l of luvas) {
+    const c = centroLuva(l);
+    if (!c) { l.c = null; l.v = 0; continue; }
+    if (l.c && l.t) {
+      const dt = (t - l.t) / 1000;
+      if (dt > 0.008 && dt < 0.3) {
+        const v = Math.hypot(c.x - l.c.x, c.y - l.c.y, c.z - l.c.z) / dt / sw;
+        l.v = Math.max(v, (l.v || 0) * 0.6);
+      }
+    }
+    l.c = c; l.t = t;
+  }
+}
+function checaSoco(t, mp) {
+  const g = geoSaco();
+  const sw = larguraOmbros();
+  for (const l of luvas) {
+    if (!l.c) continue;
+    const p = mp(l.c);
+    const rLuva = Math.min(70, Math.max(22, sw * innerWidth * 0.2));
+    const perto = Math.hypot(p[0] - g.cx, p[1] - g.cy) < g.raio + rLuva * 0.6;
+    if (perto && l.v > FORCAS[forca][1] && t - (l.hit || 0) > 350) {
+      l.hit = t;
+      const dir = g.cx >= p[0] ? 1 : -1;
+      saco.vel += dir * 3.2 * Math.min(l.v / 3, 1.6);
+      som(150 + Math.random() * 40);
+      if (navigator.vibrate) navigator.vibrate(25);
+      if (jogo.estado === "jogando") {
+        jogo.combo = (t - jogo.ultimoHit < 1200) ? jogo.combo + 1 : 1;
+        jogo.ultimoHit = t;
+        const pontos = 1 + Math.floor(jogo.combo / 5);
+        jogo.score += pontos;
+        textos.push({ x: g.cx, y: g.cy - g.bh, t, txt: "+" + pontos + (jogo.combo > 1 ? "  x" + jogo.combo : "") });
+      }
+    }
+  }
+}
+function desenhaLuvas(mp) {
+  const sw = larguraOmbros();
+  const r = Math.min(70, Math.max(22, sw * innerWidth * 0.2));
+  const vermelho = cor("--luva");
+  for (const l of luvas) {
+    if (!l.c) continue;
+    const p = mp(l.c);
+    ctx.fillStyle = vermelho; ctx.strokeStyle = "#5a0d0d"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(p[0] + (l.id === "E" ? r * 0.7 : -r * 0.7), p[1] + r * 0.35, r * 0.38, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,.35)";
+    ctx.beginPath(); ctx.arc(p[0] - r * 0.3, p[1] - r * 0.3, r * 0.22, 0, 7); ctx.fill();
+  }
+}
 
-  if (resPose.landmarks && resPose.landmarks[0]) {
-    const lm = resPose.landmarks[0].map(m);
-    for (const [a, b] of OSSOS) linha(lm[a], lm[b], corpo, 3);
-    for (const i of PONTOS_CORPO) ponto(lm[i], corpo, 7);
-    const e = lm[7], d = lm[8], n = lm[0];
+// ---------- desenho do boneco ----------
+function desenhaBoneco(mp) {
+  const corpo = cor("--corpo");
+  for (const [a, b] of OSSOS) {
+    if (modo === "luta" && (a >= 15 && a <= 22 || b >= 15 && b <= 22)) continue;
+    if (ok(a) && ok(b)) linha(mp(pts[a]), mp(pts[b]), corpo, 3);
+  }
+  for (const i of PONTOS_CORPO) if (ok(i)) ponto(mp(pts[i]), corpo, 7);
+  if (modo === "boneco") for (const i of [15, 16]) if (ok(i)) ponto(mp(pts[i]), corpo, 7);
+  if (ok(7) && ok(8)) {
+    const e = mp(pts[7]), d = mp(pts[8]);
     const raio = Math.max(18, Math.hypot(e[0] - d[0], e[1] - d[1]) * 0.9);
     const cx = (e[0] + d[0]) / 2, cy = (e[1] + d[1]) / 2;
     ctx.strokeStyle = corpo; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(cx, cy, raio, 0, 7); ctx.stroke();
-    ponto(n, corpo, 5);
-    const ombros = [(lm[11][0] + lm[12][0]) / 2, (lm[11][1] + lm[12][1]) / 2];
-    linha([cx, cy + raio], ombros, corpo, 3);
+    if (ok(0)) ponto(mp(pts[0]), corpo, 5);
+    if (ok(11) && ok(12)) {
+      const o1 = mp(pts[11]), o2 = mp(pts[12]);
+      linha([cx, cy + raio], [(o1[0] + o2[0]) / 2, (o1[1] + o2[1]) / 2], corpo, 3);
+    }
   }
-  if (resMaos.landmarks) {
-    for (const mao of resMaos.landmarks) {
-      const h = mao.map(m);
+  if (modo === "boneco" && maosIdade < 8) {
+    const dedos = cor("--dedos");
+    for (const mao of maosAtuais) {
+      const h = mao.map(mp);
       for (const [a, b] of DEDOS) linha(h[a], h[b], dedos, 2);
       for (const p of h) ponto(p, dedos, 4);
     }
   }
 }
 
+// ---------- loop ----------
+let ultimoRender = 0;
+function render(t) {
+  const dt = Math.min(0.05, (t - ultimoRender) / 1000 || 0.016);
+  ultimoRender = t;
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  const mp = mapa();
+  if (!mp) return;
+
+  if (modo === "luta") {
+    saco.vel += (-18 * saco.ang - 2.2 * saco.vel) * dt;
+    saco.ang = Math.max(-0.9, Math.min(0.9, saco.ang + saco.vel * dt));
+    desenhaSaco();
+  }
+  desenhaBoneco(mp);
+  if (modo === "luta") desenhaLuvas(mp);
+
+  for (let i = textos.length - 1; i >= 0; i--) {
+    const x = textos[i], idade = (t - x.t) / 700;
+    if (idade > 1) { textos.splice(i, 1); continue; }
+    ctx.globalAlpha = 1 - idade; ctx.fillStyle = "#ffc94d"; ctx.font = "bold 34px system-ui";
+    ctx.textAlign = "center"; ctx.fillText(x.txt, x.x, x.y - idade * 60); ctx.globalAlpha = 1;
+  }
+
+  if (jogo.estado === "jogando") {
+    jogo.tempo -= dt;
+    if (jogo.tempo <= 0) {
+      jogo.tempo = 0; jogo.estado = "fim";
+      if (jogo.score > jogo.melhor) {
+        jogo.melhor = jogo.score;
+        try { localStorage.setItem("melhorSoco", String(jogo.melhor)); } catch (e) {}
+      }
+      msg.textContent = "Fim! Você fez " + jogo.score + " pontos. Melhor: " + jogo.melhor + ".";
+      comecarBtn.textContent = "Jogar de novo";
+    }
+  }
+  placar.textContent = modo === "luta" ? "Pontos: " + jogo.score : "";
+  relogio.textContent = modo === "luta" && jogo.estado !== "parado" ? Math.ceil(jogo.tempo) + "s" : "";
+}
+
 function laco() {
   if (!rodando) return;
+  const t = performance.now();
   if (video.readyState >= 2 && video.currentTime !== ultimoTempo) {
     ultimoTempo = video.currentTime;
-    const t = performance.now();
     try {
       const rp = pose.detectForVideo(video, t);
-      const rm = maos.detectForVideo(video, t);
-      desenha(rp, rm);
+      atualizaPose(rp);
+      if (modo === "boneco") {
+        const rm = maos.detectForVideo(video, t);
+        if (rm.landmarks && rm.landmarks.length) { maosAtuais = rm.landmarks; maosIdade = 0; } else maosIdade++;
+      } else {
+        atualizaLuvas(t);
+        const mp = mapa();
+        if (mp) checaSoco(t, mp);
+      }
     } catch (e) { msg.textContent = "Erro ao detectar: " + e.message; }
   }
+  render(t);
   requestAnimationFrame(laco);
 }
 
+// ---------- modelos e câmera ----------
 async function criaModelos() {
   const arquivos = await FilesetResolver.forVisionTasks(WASM);
   for (const delegate of ["GPU", "CPU"]) {
     try {
       pose = await PoseLandmarker.createFromOptions(arquivos, {
         baseOptions: { modelAssetPath: POSE_MODEL, delegate },
-        runningMode: "VIDEO", numPoses: 1
+        runningMode: "VIDEO", numPoses: 1,
+        minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5
       });
       maos = await HandLandmarker.createFromOptions(arquivos, {
         baseOptions: { modelAssetPath: HAND_MODEL, delegate },
@@ -139,8 +322,14 @@ async function criaModelos() {
   }
 }
 
+function textoModo() {
+  if (modo === "luta") msg.textContent = "Dê socos no saco de pancada. Aperte Começar luta para valer pontos.";
+  else msg.textContent = "Fique de corpo inteiro e mexa os braços, as pernas e as mãos.";
+}
+
 async function ativar() {
   liga.disabled = true;
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
   try {
     msg.textContent = "Carregando detector do corpo (precisa de internet)...";
     if (!pose) await criaModelos();
@@ -150,9 +339,9 @@ async function ativar() {
     });
     video.srcObject = stream;
     await video.play();
-    rodando = true; ultimoTempo = -1;
+    rodando = true; ultimoTempo = -1; ultimoRender = performance.now();
     liga.textContent = "Desligar câmera";
-    msg.textContent = "Fique de corpo inteiro e mexa os braços e as pernas.";
+    textoModo();
     laco();
   } catch (e) {
     msg.textContent = "Não deu certo: " + (e.name === "NotAllowedError" ? "permita a câmera no navegador." : e.message);
@@ -165,15 +354,32 @@ function desligar() {
   if (stream) stream.getTracks().forEach(t => t.stop());
   video.srcObject = null;
   ctx.clearRect(0, 0, innerWidth, innerHeight);
+  jogo.estado = "parado"; comecarBtn.textContent = "Começar luta";
   liga.textContent = "Ativar câmera";
   msg.textContent = "Câmera desligada.";
 }
 
+function aplicaModo() {
+  const luta = modo === "luta";
+  modoBtn.textContent = "Modo: " + (luta ? "Luta" : "Boneco");
+  comecarBtn.classList.toggle("oculto", !luta);
+  forcaBtn.classList.toggle("oculto", !luta);
+  if (rodando) textoModo();
+}
+
 liga.addEventListener("click", () => rodando ? desligar() : ativar());
+modoBtn.addEventListener("click", () => { modo = modo === "luta" ? "boneco" : "luta"; jogo.estado = "parado"; comecarBtn.textContent = "Começar luta"; aplicaModo(); });
+comecarBtn.addEventListener("click", () => {
+  if (!rodando) { msg.textContent = "Ative a câmera primeiro."; return; }
+  jogo.estado = "jogando"; jogo.tempo = 30; jogo.score = 0; jogo.combo = 0;
+  msg.textContent = "Soque o saco! Você tem 30 segundos.";
+});
+forcaBtn.addEventListener("click", () => { forca = (forca + 1) % FORCAS.length; forcaBtn.textContent = "Força: " + FORCAS[forca][0]; });
 fundo.addEventListener("click", () => {
   const esc = video.classList.toggle("escondido");
   fundo.textContent = esc ? "Fundo: preto" : "Fundo: câmera";
 });
+aplicaModo();
 </script>
 </body>
 </html>
