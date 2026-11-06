@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Boneco de pontos</title>
+<title>Body Robot 3D</title>
 <style>
-  :root { --palco:#000; --corpo:#f2f2f2; --dedos:#ffc94d; --luta:#d62828; --botao:#ffffff; --texto-botao:#111; }
+  :root { --palco:#050814; --dedos:#ffc94d; --luta:#d62828; --botao:#ffffff; --texto-botao:#111; }
   html, body { margin:0; height:100%; background:var(--palco); color:#fff; font-family: system-ui, sans-serif; overflow:hidden; }
   #video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); opacity:.35; }
   #video.escondido { opacity:0; }
@@ -30,6 +30,7 @@
   <button id="modo" class="sec">Modo: Boneco</button>
   <button id="comecar" class="jogar">Começar</button>
   <button id="forca" class="sec">Força: Normal</button>
+  <button id="corBtn" class="sec">Cor: Azul</button>
   <button id="fundo" class="sec">Fundo: câmera</button>
 </div>
 
@@ -45,6 +46,7 @@ const $ = id => document.getElementById(id);
 const video = $("video"), tela = $("tela"), ctx = tela.getContext("2d");
 const msg = $("msg"), liga = $("liga"), fundo = $("fundo"), modoBtn = $("modo");
 const comecarBtn = $("comecar"), forcaBtn = $("forca"), relogio = $("relogio"), placar = $("placar");
+const corBtn = $("corBtn");
 
 let pose, maos, stream, rodando = false, ultimoTempo = -1;
 const MODOS = ["boneco", "luta", "comer"];
@@ -52,6 +54,11 @@ const NOMES = { boneco: "Boneco", luta: "Luta", comer: "Comer" };
 let modo = "boneco";
 const FORCAS = [["Fácil", 2.0], ["Normal", 3.0], ["Difícil", 4.2]];
 let forca = 1;
+
+// ---------- cores do robô ----------
+const ACENTOS = [["Azul", "#2ea8ff"], ["Vermelho", "#ff3b3b"], ["Amarelo", "#ffc94d"], ["Roxo", "#a855ff"]];
+let acento = 0;
+const BRANCO = "#e9ecf5", PRETO = "#0a0c14";
 
 // ---------- jogo ----------
 const jogo = { estado: "parado", tempo: 30, score: 0, combo: 0, ultimoHit: 0 };
@@ -65,7 +72,7 @@ const luvas = [ {id:"E", ids:[15,17,19,21]}, {id:"D", ids:[16,18,20,22]} ];
 const textos = [];
 const comidas = [];
 const punhos = [];
-const EMOJIS = ["🍎", "🍌", "🍕", "🍔", "🍇", "🍪", "🍓", "🥕"];
+const EMOJIS = ["🍎", "🍌", "🍕", "🍔", "🍇", "🍪", "🍓", "🥕","🎂"];
 let proxComida = 0;
 let audio;
 
@@ -81,19 +88,13 @@ function som(f) {
 
 // ---------- corpo suavizado ----------
 const pts = [];
-const OSSOS = [
-  [11,12],[11,13],[13,15],[12,14],[14,16],
-  [11,23],[12,24],[23,24],
-  [23,25],[25,27],[27,29],[27,31],[29,31],
-  [24,26],[26,28],[28,30],[28,32],[30,32]
-];
-const PONTOS_CORPO = [11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32];
+let maosAtuais = [], maosIdade = 99;
+const ok = i => pts[i] && pts[i].miss < 12;
+
 const DEDOS = [
   [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
   [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]
 ];
-let maosAtuais = [], maosIdade = 99;
-const ok = i => pts[i] && pts[i].miss < 12;
 
 function atualizaPose(res) {
   const lm = res.landmarks && res.landmarks[0];
@@ -104,7 +105,7 @@ function atualizaPose(res) {
     if (!p) { pts[i] = { x:l.x, y:l.y, z:l.z, v, miss:0 }; return; }
     if (v < 0.35) { p.miss++; p.v = v; return; }
     if (p.miss >= 12) { p.x = l.x; p.y = l.y; p.z = l.z; }
-    else { const a = 0.6; p.x += (l.x - p.x) * a; p.y += (l.y - p.y) * a; p.z += (l.z - p.z) * a; }
+    else { const a = 0.85; p.x += (l.x - p.x) * a; p.y += (l.y - p.y) * a; p.z += (l.z - p.z) * a; }
     p.v = v; p.miss = 0;
   });
   return true;
@@ -132,7 +133,6 @@ function linha(a, b, cor, larg) {
   ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
 }
 function ponto(p, cor, r) { ctx.fillStyle = cor; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill(); }
-const cor = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 // ---------- LUTA: saco de pancada ----------
 function geoSaco() {
@@ -285,37 +285,187 @@ function atualizaComidas(dt, t, mp) {
   }
 }
 
-// ---------- desenho do boneco ----------
-function desenhaBoneco(mp) {
-  const corpo = cor("--corpo");
-  for (const [a, b] of OSSOS) {
-    if (ok(a) && ok(b)) linha(mp(pts[a]), mp(pts[b]), corpo, 3);
+// ---------- ROBÔ (Body Robot 3D) ----------
+function luz(c, b) {}
+function semLuz() {}
+function halo(a, b, c, w) { ctx.globalAlpha = 0.28; linha(a, b, c, w); ctx.globalAlpha = 1; }
+
+// peça de armadura: contorno preto, placa branca e faixa de luz no meio
+function peca(a, b, w, ac) {
+  linha(a, b, PRETO, w + 7);
+  linha(a, b, BRANCO, w);
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const p1 = [a[0] + dx * 0.25, a[1] + dy * 0.25], p2 = [a[0] + dx * 0.75, a[1] + dy * 0.75];
+  halo(p1, p2, ac, Math.max(5, w * 0.34));
+  linha(p1, p2, ac, Math.max(2, w * 0.13));
+}
+// junta preta com anel de luz
+function junta(p, r, ac) {
+  ponto(p, PRETO, r);
+  ctx.save(); luz(ac, 10);
+  ctx.strokeStyle = ac; ctx.lineWidth = Math.max(2, r * 0.22);
+  ctx.beginPath(); ctx.arc(p[0], p[1], r * 0.62, 0, 7); ctx.stroke();
+  ctx.restore();
+}
+function poligono(lista, preench, borda, larg) {
+  ctx.beginPath();
+  lista.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+  ctx.closePath();
+  if (preench) { ctx.fillStyle = preench; ctx.fill(); }
+  if (borda) { ctx.strokeStyle = borda; ctx.lineWidth = larg; ctx.lineJoin = "round"; ctx.stroke(); }
+}
+const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+
+function desenhaPerna(mp, q, j, t, c, s, ac) {
+  // q = quadril, j = joelho, t = tornozelo, c = calcanhar, c + 2 = ponta do pé
+  if (ok(q) && ok(j)) peca(mp(pts[q]), mp(pts[j]), s * 0.36, ac);
+  if (ok(j) && ok(t)) peca(mp(pts[j]), mp(pts[t]), s * 0.28, ac);
+  if (ok(j)) junta(mp(pts[j]), s * 0.19, ac);
+  if (ok(t) && ok(c) && ok(c + 2)) {
+    const tor = mp(pts[t]), cal = mp(pts[c]), pon = mp(pts[c + 2]);
+    peca(cal, pon, s * 0.26, ac);
+    junta(tor, s * 0.12, ac);
   }
-  for (const i of PONTOS_CORPO) if (ok(i)) ponto(mp(pts[i]), corpo, 7);
-  if (ok(7) && ok(8)) {
-    const e = mp(pts[7]), d = mp(pts[8]);
-    const raio = Math.max(18, Math.hypot(e[0] - d[0], e[1] - d[1]) * 0.9);
-    const cx = (e[0] + d[0]) / 2, cy = (e[1] + d[1]) / 2;
-    ctx.strokeStyle = corpo; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(cx, cy, raio, 0, 7); ctx.stroke();
-    if (ok(0)) ponto(mp(pts[0]), corpo, 5);
-    if (ok(11) && ok(12)) {
-      const o1 = mp(pts[11]), o2 = mp(pts[12]);
-      linha([cx, cy + raio], [(o1[0] + o2[0]) / 2, (o1[1] + o2[1]) / 2], corpo, 3);
-    }
+}
+function desenhaBraco(mp, o, co, pu, s, ac) {
+  if (ok(o) && ok(co)) peca(mp(pts[o]), mp(pts[co]), s * 0.26, ac);
+  if (ok(co) && ok(pu)) peca(mp(pts[co]), mp(pts[pu]), s * 0.2, ac);
+  if (ok(co)) junta(mp(pts[co]), s * 0.15, ac);
+  if (ok(o)) {
+    const p = mp(pts[o]);
+    ponto(p, PRETO, s * 0.3);
+    ponto(p, BRANCO, s * 0.25);
+    ctx.save(); luz(ac, 8);
+    ctx.strokeStyle = ac; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(p[0], p[1], s * 0.17, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+    ctx.restore();
   }
-  if (maosIdade < 8) {
-    const dedos = cor("--dedos");
+  if (ok(pu)) junta(mp(pts[pu]), s * 0.11, ac);
+}
+
+function desenhaTorso(mp, s, ac) {
+  if (!(ok(11) && ok(12) && ok(23) && ok(24))) return;
+  const sL = mp(pts[11]), sR = mp(pts[12]), hL = mp(pts[23]), hR = mp(pts[24]);
+  const ms = mix(sL, sR, 0.5), mh = mix(hL, hR, 0.5);
+  // pescoço
+  linha(ms, mix(ms, mh, -0.12), PRETO, s * 0.22);
+  // corpo escuro (barriga com gomos)
+  poligono([sL, sR, hR, hL], PRETO, PRETO, 6);
+  // gomos do abdômen
+  ctx.save(); luz(ac, 8);
+  for (let k = 0; k < 3; k++) {
+    const t = 0.55 + k * 0.13;
+    linha(mix(mix(sL, hL, t), mix(sR, hR, t), 0.3), mix(mix(sL, hL, t), mix(sR, hR, t), 0.7), ac, 2);
+  }
+  ctx.restore();
+  // peitoral branco
+  const cL = mix(sL, hL, 0.5), cR = mix(sR, hR, 0.5);
+  const iL = mix(cL, cR, 0.08), iR = mix(cL, cR, 0.92);
+  poligono([mix(sL, sR, 0.04), mix(sL, sR, 0.96), iR, iL], BRANCO, PRETO, 4);
+  // linhas de luz laterais do peito
+  ctx.save(); luz(ac, 10);
+  linha(mix(sL, sR, 0.14), mix(iL, iR, 0.14), ac, 2.5);
+  linha(mix(sL, sR, 0.86), mix(iL, iR, 0.86), ac, 2.5);
+  ctx.restore();
+  // núcleo hexagonal brilhante
+  const c = mix(ms, mh, 0.2), r = s * 0.2;
+  const hex = [];
+  for (let i = 0; i < 6; i++) hex.push([c[0] + Math.cos(i * Math.PI / 3 + Math.PI / 6) * r, c[1] + Math.sin(i * Math.PI / 3 + Math.PI / 6) * r]);
+  ctx.save(); luz(ac, 22);
+  poligono(hex, PRETO, ac, 3);
+  ctx.restore();
+  ctx.globalAlpha = 0.3; ponto(c, ac, r * 1.5); ctx.globalAlpha = 1;
+  ponto(c, "#ffffff", r * 0.4);
+  ctx.save(); luz(ac, 14); ponto(c, ac, r * 0.28); ctx.restore();
+  // cinto / pélvis
+  peca(hL, hR, s * 0.28, ac);
+  // placa entre as pernas
+  poligono([mix(hL, hR, 0.3), mix(hL, hR, 0.7), mix(mix(hL, hR, 0.62), [mh[0], mh[1] + s * 0.32], 0.9), mix(mix(hL, hR, 0.38), [mh[0], mh[1] + s * 0.32], 0.9)], BRANCO, PRETO, 3);
+}
+
+function desenhaCabeca(mp, s, ac) {
+  if (!(ok(7) && ok(8))) return;
+  let e = mp(pts[7]), d = mp(pts[8]);
+  if (e[0] > d[0]) [e, d] = [d, e];
+  const cx = (e[0] + d[0]) / 2, cy = (e[1] + d[1]) / 2;
+  const larg = Math.hypot(d[0] - e[0], d[1] - e[1]);
+  const rw = Math.max(18, larg * 0.75), rh = rw * 1.25;
+  const ang = Math.atan2(d[1] - e[1], d[0] - e[0]);
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(ang);
+  // capacete
+  ctx.fillStyle = BRANCO; ctx.strokeStyle = PRETO; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.ellipse(0, 0, rw, rh, 0, 0, 7); ctx.fill(); ctx.stroke();
+  // faixa central do capacete
+  ctx.fillStyle = "#b8c0d4";
+  ctx.beginPath(); ctx.ellipse(0, -rh * 0.55, rw * 0.22, rh * 0.38, 0, 0, 7); ctx.fill();
+  // visor preto
+  ctx.fillStyle = PRETO;
+  ctx.beginPath(); ctx.ellipse(0, rh * 0.12, rw * 0.8, rh * 0.62, 0, 0, 7); ctx.fill();
+  // olhos de luz inclinados
+  ctx.save(); luz(ac, 16);
+  halo([-rw * 0.62, -rh * 0.02], [-rw * 0.14, rh * 0.14], ac, rh * 0.3);
+  halo([rw * 0.62, -rh * 0.02], [rw * 0.14, rh * 0.14], ac, rh * 0.3);
+  linha([-rw * 0.62, -rh * 0.02], [-rw * 0.14, rh * 0.14], ac, rh * 0.13);
+  linha([rw * 0.62, -rh * 0.02], [rw * 0.14, rh * 0.14], ac, rh * 0.13);
+  ctx.restore();
+  // fones laterais
+  for (const lado of [-1, 1]) {
+    ctx.fillStyle = BRANCO; ctx.strokeStyle = PRETO; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(lado * rw * 1.02, rh * 0.02, rw * 0.2, rh * 0.3, 0, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.save(); luz(ac, 8); ctx.strokeStyle = ac; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(lado * rw * 1.02, rh * 0.02, rw * 0.1, 0, 7); ctx.stroke(); ctx.restore();
+  }
+  ctx.restore();
+}
+
+function desenhaMaos(mp, s, ac) {
+  if (maosIdade < 8 && maosAtuais.length) {
     for (const mao of maosAtuais) {
       const h = mao.map(mp);
-      for (const [a, b] of DEDOS) linha(h[a], h[b], dedos, 2);
-      for (const p of h) ponto(p, dedos, 4);
+      const palma = [h[0], h[5], h[9], h[13], h[17]];
+      poligono(palma, BRANCO, PRETO, 3);
+      for (const [a, b] of DEDOS) { linha(h[a], h[b], PRETO, 6); }
+      for (const [a, b] of DEDOS) { linha(h[a], h[b], BRANCO, 2.5); }
+      ctx.save(); luz(ac, 10);
+      for (const i of [4, 8, 12, 16, 20]) ponto(h[i], ac, 4);
+      const pc = mix(h[0], h[9], 0.5);
+      ponto(pc, ac, 5);
+      ctx.restore();
+    }
+  } else {
+    // sem mãos detectadas: punhos de luva
+    for (const [a, b, c2, d] of [[15, 17, 19, 21], [16, 18, 20, 22]]) {
+      if (!ok(a)) continue;
+      let x = 0, y = 0, n = 0;
+      for (const i of [a, b, c2, d]) if (ok(i)) { const p = mp(pts[i]); x += p[0]; y += p[1]; n++; }
+      const p = [x / n, y / n];
+      ponto(p, PRETO, s * 0.17);
+      ponto(p, BRANCO, s * 0.13);
+      ctx.save(); luz(ac, 10); ponto(p, ac, s * 0.05); ctx.restore();
     }
   }
 }
 
+function desenhaBoneco(mp) {
+  const ac = ACENTOS[acento][1];
+  let s = 80;
+  if (ok(11) && ok(12)) {
+    const a = mp(pts[11]), b = mp(pts[12]);
+    s = Math.max(40, Math.min(400, Math.hypot(a[0] - b[0], a[1] - b[1])));
+  }
+  desenhaPerna(mp, 24, 26, 28, 30, s, ac);
+  desenhaPerna(mp, 23, 25, 27, 29, s, ac);
+  desenhaTorso(mp, s, ac);
+  desenhaBraco(mp, 12, 14, 16, s, ac);
+  desenhaBraco(mp, 11, 13, 15, s, ac);
+  desenhaCabeca(mp, s, ac);
+  desenhaMaos(mp, s, ac);
+  semLuz();
+}
+
 // ---------- loop ----------
-let ultimoRender = 0;
+let ultimoRender = 0, quadro = 0;
 function render(t) {
   const dt = Math.min(0.05, (t - ultimoRender) / 1000 || 0.016);
   ultimoRender = t;
@@ -336,131 +486,4 @@ function render(t) {
     if (idade > 1) { textos.splice(i, 1); continue; }
     ctx.globalAlpha = 1 - idade; ctx.fillStyle = "#ffc94d"; ctx.font = "bold 34px system-ui";
     ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
-    ctx.fillText(x.txt, x.x, x.y - idade * 60); ctx.globalAlpha = 1;
-  }
-
-  if (jogo.estado === "jogando") {
-    jogo.tempo -= dt;
-    if (jogo.tempo <= 0) {
-      jogo.tempo = 0; jogo.estado = "fim";
-      if (jogo.score > melhor[modo]) {
-        melhor[modo] = jogo.score;
-        try { localStorage.setItem(modo === "luta" ? "melhorSoco" : "melhorComida", String(jogo.score)); } catch (e) {}
-      }
-      msg.textContent = "Fim! Você fez " + jogo.score + " pontos. Melhor: " + melhor[modo] + ".";
-      comecarBtn.textContent = "Jogar de novo";
-    }
-  }
-  const jogavel = modo !== "boneco";
-  placar.textContent = jogavel ? "Pontos: " + jogo.score : "";
-  relogio.textContent = jogavel && jogo.estado !== "parado" ? Math.ceil(jogo.tempo) + "s" : "";
-}
-
-function laco() {
-  if (!rodando) return;
-  const t = performance.now();
-  if (video.readyState >= 2 && video.currentTime !== ultimoTempo) {
-    ultimoTempo = video.currentTime;
-    try {
-      const rp = pose.detectForVideo(video, t);
-      atualizaPose(rp);
-      const rm = maos.detectForVideo(video, t);
-      if (rm.landmarks && rm.landmarks.length) { maosAtuais = rm.landmarks; maosIdade = 0; } else maosIdade++;
-      if (modo === "luta") {
-        atualizaLuvas(t);
-        const mp = mapa();
-        if (mp) checaSoco(t, mp);
-      }
-    } catch (e) { msg.textContent = "Erro ao detectar: " + e.message; }
-  }
-  render(t);
-  requestAnimationFrame(laco);
-}
-
-// ---------- modelos e câmera ----------
-async function criaModelos() {
-  const arquivos = await FilesetResolver.forVisionTasks(WASM);
-  for (const delegate of ["GPU", "CPU"]) {
-    try {
-      pose = await PoseLandmarker.createFromOptions(arquivos, {
-        baseOptions: { modelAssetPath: POSE_MODEL, delegate },
-        runningMode: "VIDEO", numPoses: 1,
-        minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5
-      });
-      maos = await HandLandmarker.createFromOptions(arquivos, {
-        baseOptions: { modelAssetPath: HAND_MODEL, delegate },
-        runningMode: "VIDEO", numHands: 2
-      });
-      return;
-    } catch (e) { if (delegate === "CPU") throw e; }
-  }
-}
-
-function textoModo() {
-  if (modo === "luta") msg.textContent = "Dê socos no saco de pancada. Aperte Começar para valer pontos.";
-  else if (modo === "comer") msg.textContent = "Feche a mão sobre a comida para pegar e leve até a boca. Aperte Começar para valer pontos.";
-  else msg.textContent = "Fique de corpo inteiro e mexa os braços, as pernas e as mãos.";
-}
-
-async function ativar() {
-  liga.disabled = true;
-  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
-  try {
-    msg.textContent = "Carregando detector do corpo (precisa de internet)...";
-    if (!pose) await criaModelos();
-    msg.textContent = "Abrindo câmera...";
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
-    });
-    video.srcObject = stream;
-    await video.play();
-    rodando = true; ultimoTempo = -1; ultimoRender = performance.now();
-    liga.textContent = "Desligar câmera";
-    textoModo();
-    laco();
-  } catch (e) {
-    msg.textContent = "Não deu certo: " + (e.name === "NotAllowedError" ? "permita a câmera no navegador." : e.message);
-  }
-  liga.disabled = false;
-}
-
-function reiniciaJogo() {
-  jogo.estado = "parado"; jogo.score = 0; jogo.combo = 0; jogo.tempo = 30;
-  comidas.length = 0; textos.length = 0; punhos.length = 0;
-  comecarBtn.textContent = modo === "comer" ? "Começar a comer" : "Começar luta";
-}
-
-function desligar() {
-  rodando = false;
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  video.srcObject = null;
-  ctx.clearRect(0, 0, innerWidth, innerHeight);
-  reiniciaJogo();
-  liga.textContent = "Ativar câmera";
-  msg.textContent = "Câmera desligada.";
-}
-
-function aplicaModo() {
-  modoBtn.textContent = "Modo: " + NOMES[modo];
-  comecarBtn.classList.toggle("oculto", modo === "boneco");
-  forcaBtn.classList.toggle("oculto", modo !== "luta");
-  reiniciaJogo();
-  if (rodando) textoModo();
-}
-
-liga.addEventListener("click", () => rodando ? desligar() : ativar());
-modoBtn.addEventListener("click", () => { modo = MODOS[(MODOS.indexOf(modo) + 1) % MODOS.length]; aplicaModo(); });
-comecarBtn.addEventListener("click", () => {
-  if (!rodando) { msg.textContent = "Ative a câmera primeiro."; return; }
-  jogo.estado = "jogando"; jogo.tempo = 30; jogo.score = 0; jogo.combo = 0;
-  msg.textContent = modo === "comer" ? "Pegue a comida e leve até a boca! 30 segundos." : "Soque o saco! Você tem 30 segundos.";
-});
-forcaBtn.addEventListener("click", () => { forca = (forca + 1) % FORCAS.length; forcaBtn.textContent = "Força: " + FORCAS[forca][0]; });
-fundo.addEventListener("click", () => {
-  const esc = video.classList.toggle("escondido");
-  fundo.textContent = esc ? "Fundo: preto" : "Fundo: câmera";
-});
-aplicaModo();
-</script>
-</body>
-</html>
+    ctx.fillText(x.txt, x.x, x.y - idade * 60); ctx.globalAlpha 
