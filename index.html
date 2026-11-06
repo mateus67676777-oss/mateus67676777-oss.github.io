@@ -38,7 +38,7 @@ import { PoseLandmarker, HandLandmarker, FilesetResolver }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
 const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
-const POSE_MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task";
+const POSE_MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 const HAND_MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 const $ = id => document.getElementById(id);
@@ -77,7 +77,7 @@ const OSSOS = [
   [23,25],[25,27],[27,29],[27,31],[29,31],
   [24,26],[26,28],[28,30],[28,32],[30,32]
 ];
-const PONTOS_CORPO = [11,12,13,14,23,24,25,26,27,28,29,30,31,32];
+const PONTOS_CORPO = [11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32];
 const DEDOS = [
   [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
   [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]
@@ -145,7 +145,7 @@ function desenhaSaco() {
   ctx.restore();
 }
 
-// ---------- luvas ----------
+// ---------- socos (medidos pelo pulso/mão do corpo) ----------
 function centroLuva(l) {
   if (!ok(l.ids[0])) return null;
   let x = 0, y = 0, z = 0, n = 0;
@@ -195,30 +195,14 @@ function checaSoco(t, mp) {
     }
   }
 }
-function desenhaLuvas(mp) {
-  const sw = larguraOmbros();
-  const r = Math.min(70, Math.max(22, sw * innerWidth * 0.2));
-  const vermelho = cor("--luva");
-  for (const l of luvas) {
-    if (!l.c) continue;
-    const p = mp(l.c);
-    ctx.fillStyle = vermelho; ctx.strokeStyle = "#5a0d0d"; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(p[0] + (l.id === "E" ? r * 0.7 : -r * 0.7), p[1] + r * 0.35, r * 0.38, 0, 7); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = "rgba(255,255,255,.35)";
-    ctx.beginPath(); ctx.arc(p[0] - r * 0.3, p[1] - r * 0.3, r * 0.22, 0, 7); ctx.fill();
-  }
-}
 
 // ---------- desenho do boneco ----------
 function desenhaBoneco(mp) {
   const corpo = cor("--corpo");
   for (const [a, b] of OSSOS) {
-    if (modo === "luta" && (a >= 15 && a <= 22 || b >= 15 && b <= 22)) continue;
     if (ok(a) && ok(b)) linha(mp(pts[a]), mp(pts[b]), corpo, 3);
   }
   for (const i of PONTOS_CORPO) if (ok(i)) ponto(mp(pts[i]), corpo, 7);
-  if (modo === "boneco") for (const i of [15, 16]) if (ok(i)) ponto(mp(pts[i]), corpo, 7);
   if (ok(7) && ok(8)) {
     const e = mp(pts[7]), d = mp(pts[8]);
     const raio = Math.max(18, Math.hypot(e[0] - d[0], e[1] - d[1]) * 0.9);
@@ -231,7 +215,7 @@ function desenhaBoneco(mp) {
       linha([cx, cy + raio], [(o1[0] + o2[0]) / 2, (o1[1] + o2[1]) / 2], corpo, 3);
     }
   }
-  if (modo === "boneco" && maosIdade < 8) {
+  if (maosIdade < 8) {
     const dedos = cor("--dedos");
     for (const mao of maosAtuais) {
       const h = mao.map(mp);
@@ -256,7 +240,6 @@ function render(t) {
     desenhaSaco();
   }
   desenhaBoneco(mp);
-  if (modo === "luta") desenhaLuvas(mp);
 
   for (let i = textos.length - 1; i >= 0; i--) {
     const x = textos[i], idade = (t - x.t) / 700;
@@ -289,10 +272,9 @@ function laco() {
     try {
       const rp = pose.detectForVideo(video, t);
       atualizaPose(rp);
-      if (modo === "boneco") {
-        const rm = maos.detectForVideo(video, t);
-        if (rm.landmarks && rm.landmarks.length) { maosAtuais = rm.landmarks; maosIdade = 0; } else maosIdade++;
-      } else {
+      const rm = maos.detectForVideo(video, t);
+      if (rm.landmarks && rm.landmarks.length) { maosAtuais = rm.landmarks; maosIdade = 0; } else maosIdade++;
+      if (modo === "luta") {
         atualizaLuvas(t);
         const mp = mapa();
         if (mp) checaSoco(t, mp);
