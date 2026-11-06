@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Boneco de pontos</title>
 <style>
-  :root { --palco:#000; --corpo:#f2f2f2; --dedos:#ffc94d; --luva:#d62828; --botao:#ffffff; --texto-botao:#111; }
+  :root { --palco:#000; --corpo:#f2f2f2; --dedos:#ffc94d; --luta:#d62828; --botao:#ffffff; --texto-botao:#111; }
   html, body { margin:0; height:100%; background:var(--palco); color:#fff; font-family: system-ui, sans-serif; overflow:hidden; }
   #video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); opacity:.35; }
   #video.escondido { opacity:0; }
@@ -15,7 +15,7 @@
   #barra { position:absolute; left:0; right:0; bottom:0; display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:12px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
   button { font:inherit; font-size:16px; font-weight:600; border:0; border-radius:14px; padding:13px 16px; background:var(--botao); color:var(--texto-botao); }
   button.sec { background:#2b2b2b; color:#fff; }
-  button.luta { background:var(--luva); color:#fff; }
+  button.jogar { background:var(--luta); color:#fff; }
   button:focus-visible { outline:3px solid var(--dedos); outline-offset:2px; }
   .oculto { display:none; }
 </style>
@@ -27,8 +27,8 @@
 <div id="msg">Toque em Ativar câmera e fique de corpo inteiro, a uns 2 metros do celular.</div>
 <div id="barra">
   <button id="liga">Ativar câmera</button>
-  <button id="modo" class="sec">Modo: Luta</button>
-  <button id="comecar" class="luta">Começar luta</button>
+  <button id="modo" class="sec">Modo: Boneco</button>
+  <button id="comecar" class="jogar">Começar</button>
   <button id="forca" class="sec">Força: Normal</button>
   <button id="fundo" class="sec">Fundo: câmera</button>
 </div>
@@ -47,24 +47,34 @@ const msg = $("msg"), liga = $("liga"), fundo = $("fundo"), modoBtn = $("modo");
 const comecarBtn = $("comecar"), forcaBtn = $("forca"), relogio = $("relogio"), placar = $("placar");
 
 let pose, maos, stream, rodando = false, ultimoTempo = -1;
-let modo = "luta";                       // "luta" ou "boneco"
+const MODOS = ["boneco", "luta", "comer"];
+const NOMES = { boneco: "Boneco", luta: "Luta", comer: "Comer" };
+let modo = "boneco";
 const FORCAS = [["Fácil", 2.0], ["Normal", 3.0], ["Difícil", 4.2]];
 let forca = 1;
 
 // ---------- jogo ----------
-const jogo = { estado: "parado", tempo: 30, score: 0, combo: 0, ultimoHit: 0, melhor: 0 };
-try { jogo.melhor = Number(localStorage.getItem("melhorSoco") || 0); } catch (e) {}
+const jogo = { estado: "parado", tempo: 30, score: 0, combo: 0, ultimoHit: 0 };
+const melhor = { luta: 0, comer: 0 };
+try {
+  melhor.luta = Number(localStorage.getItem("melhorSoco") || 0);
+  melhor.comer = Number(localStorage.getItem("melhorComida") || 0);
+} catch (e) {}
 const saco = { ang: 0, vel: 0 };
 const luvas = [ {id:"E", ids:[15,17,19,21]}, {id:"D", ids:[16,18,20,22]} ];
 const textos = [];
+const comidas = [];
+const punhos = [];
+const EMOJIS = ["🍎", "🍌", "🍕", "🍔", "🍇", "🍪", "🍓", "🥕"];
+let proxComida = 0;
 let audio;
 
 function som(f) {
   try {
     audio = audio || new (window.AudioContext || window.webkitAudioContext)();
     const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime;
-    o.type = "square"; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.12);
-    g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    o.type = "square"; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * 0.3, t + 0.12);
+    g.gain.setValueAtTime(0.2, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
     o.connect(g); g.connect(audio.destination); o.start(); o.stop(t + 0.15);
   } catch (e) {}
 }
@@ -92,7 +102,7 @@ function atualizaPose(res) {
     const v = l.visibility == null ? 1 : l.visibility;
     const p = pts[i];
     if (!p) { pts[i] = { x:l.x, y:l.y, z:l.z, v, miss:0 }; return; }
-    if (v < 0.35) { p.miss++; p.v = v; return; }       // ponto duvidoso: segura a última posição
+    if (v < 0.35) { p.miss++; p.v = v; return; }
     if (p.miss >= 12) { p.x = l.x; p.y = l.y; p.z = l.z; }
     else { const a = 0.6; p.x += (l.x - p.x) * a; p.y += (l.y - p.y) * a; p.z += (l.z - p.z) * a; }
     p.v = v; p.miss = 0;
@@ -124,7 +134,7 @@ function linha(a, b, cor, larg) {
 function ponto(p, cor, r) { ctx.fillStyle = cor; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill(); }
 const cor = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
-// ---------- saco de pancada ----------
+// ---------- LUTA: saco de pancada ----------
 function geoSaco() {
   const W = innerWidth, H = innerHeight;
   const bw = Math.min(W * 0.14, 70), bh = bw * 1.7;
@@ -144,8 +154,6 @@ function desenhaSaco() {
   ctx.fillRect(-g.bw, g.bh * 0.35, g.bw * 2, g.bh * 0.12);
   ctx.restore();
 }
-
-// ---------- socos (medidos pelo pulso/mão do corpo) ----------
 function centroLuva(l) {
   if (!ok(l.ids[0])) return null;
   let x = 0, y = 0, z = 0, n = 0;
@@ -177,8 +185,8 @@ function checaSoco(t, mp) {
   for (const l of luvas) {
     if (!l.c) continue;
     const p = mp(l.c);
-    const rLuva = Math.min(70, Math.max(22, sw * innerWidth * 0.2));
-    const perto = Math.hypot(p[0] - g.cx, p[1] - g.cy) < g.raio + rLuva * 0.6;
+    const rMao = Math.min(70, Math.max(22, sw * innerWidth * 0.2));
+    const perto = Math.hypot(p[0] - g.cx, p[1] - g.cy) < g.raio + rMao * 0.6;
     if (perto && l.v > FORCAS[forca][1] && t - (l.hit || 0) > 350) {
       l.hit = t;
       const dir = g.cx >= p[0] ? 1 : -1;
@@ -193,6 +201,87 @@ function checaSoco(t, mp) {
         textos.push({ x: g.cx, y: g.cy - g.bh, t, txt: "+" + pontos + (jogo.combo > 1 ? "  x" + jogo.combo : "") });
       }
     }
+  }
+}
+
+// ---------- COMER: pegar comida com a mão fechada ----------
+function calculaPunhos(mp) {
+  punhos.length = 0;
+  if (maosIdade >= 8) return;
+  const asp = video.videoWidth / video.videoHeight;
+  const d = (a, b) => Math.hypot((a.x - b.x) * asp, a.y - b.y);
+  for (const h of maosAtuais) {
+    const palma = d(h[0], h[9]) || 0.01;
+    let soma = 0;
+    for (const i of [8, 12, 16, 20]) soma += d(h[i], h[0]);
+    const razao = soma / 4 / palma;
+    let x = 0, y = 0;
+    for (const i of [0, 5, 9, 13, 17]) { x += h[i].x; y += h[i].y; }
+    punhos.push({ p: mp({ x: x / 5, y: y / 5 }), fechada: razao < 1.4 });
+  }
+}
+function punhoPerto(x, y, raio) {
+  let melhorP = null, md = raio;
+  for (const h of punhos) {
+    if (!h.fechada) continue;
+    const dd = Math.hypot(h.p[0] - x, h.p[1] - y);
+    if (dd < md) { md = dd; melhorP = h; }
+  }
+  return melhorP;
+}
+function posBoca(mp) {
+  let r = 60;
+  if (ok(7) && ok(8)) {
+    const e = mp(pts[7]), d = mp(pts[8]);
+    r = Math.max(50, Math.hypot(e[0] - d[0], e[1] - d[1]) * 0.6);
+  }
+  if (ok(9) && ok(10)) {
+    const a = mp(pts[9]), b = mp(pts[10]);
+    return { p: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], r };
+  }
+  if (ok(0)) { const n = mp(pts[0]); return { p: [n[0], n[1] + r * 0.4], r }; }
+  return null;
+}
+function atualizaComidas(dt, t, mp) {
+  const W = innerWidth, H = innerHeight;
+  proxComida -= dt;
+  if (proxComida <= 0) {
+    proxComida = 1.1 + Math.random() * 0.8;
+    comidas.push({ x: 60 + Math.random() * (W - 120), y: -40, e: EMOJIS[Math.floor(Math.random() * EMOJIS.length)], seg: false, solta: 0 });
+  }
+  const boca = posBoca(mp);
+  if (boca) {
+    ctx.setLineDash([6, 8]); ctx.strokeStyle = "rgba(255,255,255,.4)"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(boca.p[0], boca.p[1], boca.r, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+  }
+  for (let i = comidas.length - 1; i >= 0; i--) {
+    const c = comidas[i];
+    if (c.seg) {
+      const h = punhoPerto(c.x, c.y, 170);
+      if (h) { c.x += (h.p[0] - c.x) * 0.5; c.y += (h.p[1] - c.y) * 0.5; c.solta = 0; }
+      else { c.solta++; if (c.solta > 4) c.seg = false; }
+    } else {
+      c.y += 110 * dt;
+      const h = punhoPerto(c.x, c.y, 85);
+      if (h) { c.seg = true; c.solta = 0; som(420); }
+    }
+    if (c.seg && boca && Math.hypot(c.x - boca.p[0], c.y - boca.p[1]) < boca.r) {
+      if (jogo.estado === "jogando") { jogo.score++; }
+      textos.push({ x: boca.p[0], y: boca.p[1] - boca.r, t, txt: "nham!" });
+      som(560);
+      if (navigator.vibrate) navigator.vibrate(20);
+      comidas.splice(i, 1);
+      continue;
+    }
+    if (c.y > H * 0.9) { comidas.splice(i, 1); continue; }
+    ctx.font = (c.seg ? 70 : 56) + "px system-ui, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(c.e, c.x, c.y);
+  }
+  for (const h of punhos) {
+    ctx.strokeStyle = h.fechada ? "#ffc94d" : "rgba(255,255,255,.35)";
+    ctx.lineWidth = h.fechada ? 5 : 2;
+    ctx.beginPath(); ctx.arc(h.p[0], h.p[1], h.fechada ? 26 : 18, 0, 7); ctx.stroke();
   }
 }
 
@@ -240,28 +329,31 @@ function render(t) {
     desenhaSaco();
   }
   desenhaBoneco(mp);
+  if (modo === "comer") { calculaPunhos(mp); atualizaComidas(dt, t, mp); }
 
   for (let i = textos.length - 1; i >= 0; i--) {
     const x = textos[i], idade = (t - x.t) / 700;
     if (idade > 1) { textos.splice(i, 1); continue; }
     ctx.globalAlpha = 1 - idade; ctx.fillStyle = "#ffc94d"; ctx.font = "bold 34px system-ui";
-    ctx.textAlign = "center"; ctx.fillText(x.txt, x.x, x.y - idade * 60); ctx.globalAlpha = 1;
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.fillText(x.txt, x.x, x.y - idade * 60); ctx.globalAlpha = 1;
   }
 
   if (jogo.estado === "jogando") {
     jogo.tempo -= dt;
     if (jogo.tempo <= 0) {
       jogo.tempo = 0; jogo.estado = "fim";
-      if (jogo.score > jogo.melhor) {
-        jogo.melhor = jogo.score;
-        try { localStorage.setItem("melhorSoco", String(jogo.melhor)); } catch (e) {}
+      if (jogo.score > melhor[modo]) {
+        melhor[modo] = jogo.score;
+        try { localStorage.setItem(modo === "luta" ? "melhorSoco" : "melhorComida", String(jogo.score)); } catch (e) {}
       }
-      msg.textContent = "Fim! Você fez " + jogo.score + " pontos. Melhor: " + jogo.melhor + ".";
+      msg.textContent = "Fim! Você fez " + jogo.score + " pontos. Melhor: " + melhor[modo] + ".";
       comecarBtn.textContent = "Jogar de novo";
     }
   }
-  placar.textContent = modo === "luta" ? "Pontos: " + jogo.score : "";
-  relogio.textContent = modo === "luta" && jogo.estado !== "parado" ? Math.ceil(jogo.tempo) + "s" : "";
+  const jogavel = modo !== "boneco";
+  placar.textContent = jogavel ? "Pontos: " + jogo.score : "";
+  relogio.textContent = jogavel && jogo.estado !== "parado" ? Math.ceil(jogo.tempo) + "s" : "";
 }
 
 function laco() {
@@ -305,7 +397,8 @@ async function criaModelos() {
 }
 
 function textoModo() {
-  if (modo === "luta") msg.textContent = "Dê socos no saco de pancada. Aperte Começar luta para valer pontos.";
+  if (modo === "luta") msg.textContent = "Dê socos no saco de pancada. Aperte Começar para valer pontos.";
+  else if (modo === "comer") msg.textContent = "Feche a mão sobre a comida para pegar e leve até a boca. Aperte Começar para valer pontos.";
   else msg.textContent = "Fique de corpo inteiro e mexa os braços, as pernas e as mãos.";
 }
 
@@ -331,30 +424,36 @@ async function ativar() {
   liga.disabled = false;
 }
 
+function reiniciaJogo() {
+  jogo.estado = "parado"; jogo.score = 0; jogo.combo = 0; jogo.tempo = 30;
+  comidas.length = 0; textos.length = 0; punhos.length = 0;
+  comecarBtn.textContent = modo === "comer" ? "Começar a comer" : "Começar luta";
+}
+
 function desligar() {
   rodando = false;
   if (stream) stream.getTracks().forEach(t => t.stop());
   video.srcObject = null;
   ctx.clearRect(0, 0, innerWidth, innerHeight);
-  jogo.estado = "parado"; comecarBtn.textContent = "Começar luta";
+  reiniciaJogo();
   liga.textContent = "Ativar câmera";
   msg.textContent = "Câmera desligada.";
 }
 
 function aplicaModo() {
-  const luta = modo === "luta";
-  modoBtn.textContent = "Modo: " + (luta ? "Luta" : "Boneco");
-  comecarBtn.classList.toggle("oculto", !luta);
-  forcaBtn.classList.toggle("oculto", !luta);
+  modoBtn.textContent = "Modo: " + NOMES[modo];
+  comecarBtn.classList.toggle("oculto", modo === "boneco");
+  forcaBtn.classList.toggle("oculto", modo !== "luta");
+  reiniciaJogo();
   if (rodando) textoModo();
 }
 
 liga.addEventListener("click", () => rodando ? desligar() : ativar());
-modoBtn.addEventListener("click", () => { modo = modo === "luta" ? "boneco" : "luta"; jogo.estado = "parado"; comecarBtn.textContent = "Começar luta"; aplicaModo(); });
+modoBtn.addEventListener("click", () => { modo = MODOS[(MODOS.indexOf(modo) + 1) % MODOS.length]; aplicaModo(); });
 comecarBtn.addEventListener("click", () => {
   if (!rodando) { msg.textContent = "Ative a câmera primeiro."; return; }
   jogo.estado = "jogando"; jogo.tempo = 30; jogo.score = 0; jogo.combo = 0;
-  msg.textContent = "Soque o saco! Você tem 30 segundos.";
+  msg.textContent = modo === "comer" ? "Pegue a comida e leve até a boca! 30 segundos." : "Soque o saco! Você tem 30 segundos.";
 });
 forcaBtn.addEventListener("click", () => { forca = (forca + 1) % FORCAS.length; forcaBtn.textContent = "Força: " + FORCAS[forca][0]; });
 fundo.addEventListener("click", () => {
