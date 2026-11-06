@@ -1,1 +1,179 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Boneco de pontos</title>
+<style>
+  :root { --palco:#000; --corpo:#f2f2f2; --dedos:#ffc94d; --botao:#ffffff; --texto-botao:#111; }
+  html, body { margin:0; height:100%; background:var(--palco); color:#fff; font-family: system-ui, sans-serif; overflow:hidden; }
+  #video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); opacity:.35; }
+  #video.escondido { opacity:0; }
+  #tela { position:absolute; inset:0; width:100%; height:100%; }
+  #msg { position:absolute; left:16px; right:16px; top:calc(16px + env(safe-area-inset-top, 0px)); font-size:18px; line-height:1.35; }
+  #barra { position:absolute; left:0; right:0; bottom:0; display:flex; gap:12px; justify-content:center; padding:16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  button { font:inherit; font-size:18px; font-weight:600; border:0; border-radius:14px; padding:16px 22px; background:var(--botao); color:var(--texto-botao); }
+  button.sec { background:#2b2b2b; color:#fff; }
+  button:focus-visible { outline:3px solid var(--dedos); outline-offset:2px; }
+</style>
+</head>
+<body>
+<video id="video" playsinline muted></video>
+<canvas id="tela"></canvas>
+<div id="msg">Toque em Ativar câmera e fique de corpo inteiro na frente do celular.</div>
+<div id="barra">
+  <button id="liga">Ativar câmera</button>
+  <button id="fundo" class="sec">Fundo: câmera</button>
+</div>
 
+<script type="module">
+import { PoseLandmarker, HandLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const POSE_MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const HAND_MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+const video = document.getElementById("video");
+const tela = document.getElementById("tela");
+const ctx = tela.getContext("2d");
+const msg = document.getElementById("msg");
+const liga = document.getElementById("liga");
+const fundo = document.getElementById("fundo");
+
+let pose, maos, stream, rodando = false, ultimoTempo = -1;
+
+const OSSOS = [
+  [11,12],[11,13],[13,15],[12,14],[14,16],
+  [11,23],[12,24],[23,24],
+  [23,25],[25,27],[27,29],[27,31],[29,31],
+  [24,26],[26,28],[28,30],[28,32],[30,32]
+];
+const PONTOS_CORPO = [11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32];
+const DEDOS = [
+  [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]
+];
+
+function ajustaTela() {
+  const d = window.devicePixelRatio || 1;
+  tela.width = innerWidth * d;
+  tela.height = innerHeight * d;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+addEventListener("resize", ajustaTela);
+ajustaTela();
+
+function mapa() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const W = innerWidth, H = innerHeight;
+  const s = Math.max(W / vw, H / vh);
+  const ox = (W - vw * s) / 2, oy = (H - vh * s) / 2;
+  return p => [ox + (1 - p.x) * vw * s, oy + p.y * vh * s, s * vw];
+}
+
+function linha(a, b, cor, larg) {
+  ctx.strokeStyle = cor; ctx.lineWidth = larg; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+}
+function ponto(p, cor, r) {
+  ctx.fillStyle = cor; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill();
+}
+
+function desenha(resPose, resMaos) {
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  const m = mapa();
+  const corpo = getComputedStyle(document.documentElement).getPropertyValue("--corpo").trim();
+  const dedos = getComputedStyle(document.documentElement).getPropertyValue("--dedos").trim();
+
+  if (resPose.landmarks && resPose.landmarks[0]) {
+    const lm = resPose.landmarks[0].map(m);
+    for (const [a, b] of OSSOS) linha(lm[a], lm[b], corpo, 3);
+    for (const i of PONTOS_CORPO) ponto(lm[i], corpo, 7);
+    const e = lm[7], d = lm[8], n = lm[0];
+    const raio = Math.max(18, Math.hypot(e[0] - d[0], e[1] - d[1]) * 0.9);
+    const cx = (e[0] + d[0]) / 2, cy = (e[1] + d[1]) / 2;
+    ctx.strokeStyle = corpo; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(cx, cy, raio, 0, 7); ctx.stroke();
+    ponto(n, corpo, 5);
+    const ombros = [(lm[11][0] + lm[12][0]) / 2, (lm[11][1] + lm[12][1]) / 2];
+    linha([cx, cy + raio], ombros, corpo, 3);
+  }
+  if (resMaos.landmarks) {
+    for (const mao of resMaos.landmarks) {
+      const h = mao.map(m);
+      for (const [a, b] of DEDOS) linha(h[a], h[b], dedos, 2);
+      for (const p of h) ponto(p, dedos, 4);
+    }
+  }
+}
+
+function laco() {
+  if (!rodando) return;
+  if (video.readyState >= 2 && video.currentTime !== ultimoTempo) {
+    ultimoTempo = video.currentTime;
+    const t = performance.now();
+    try {
+      const rp = pose.detectForVideo(video, t);
+      const rm = maos.detectForVideo(video, t);
+      desenha(rp, rm);
+    } catch (e) { msg.textContent = "Erro ao detectar: " + e.message; }
+  }
+  requestAnimationFrame(laco);
+}
+
+async function criaModelos() {
+  const arquivos = await FilesetResolver.forVisionTasks(WASM);
+  for (const delegate of ["GPU", "CPU"]) {
+    try {
+      pose = await PoseLandmarker.createFromOptions(arquivos, {
+        baseOptions: { modelAssetPath: POSE_MODEL, delegate },
+        runningMode: "VIDEO", numPoses: 1
+      });
+      maos = await HandLandmarker.createFromOptions(arquivos, {
+        baseOptions: { modelAssetPath: HAND_MODEL, delegate },
+        runningMode: "VIDEO", numHands: 2
+      });
+      return;
+    } catch (e) { if (delegate === "CPU") throw e; }
+  }
+}
+
+async function ativar() {
+  liga.disabled = true;
+  try {
+    msg.textContent = "Carregando detector do corpo (precisa de internet)...";
+    if (!pose) await criaModelos();
+    msg.textContent = "Abrindo câmera...";
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    rodando = true; ultimoTempo = -1;
+    liga.textContent = "Desligar câmera";
+    msg.textContent = "Fique de corpo inteiro e mexa os braços e as pernas.";
+    laco();
+  } catch (e) {
+    msg.textContent = "Não deu certo: " + (e.name === "NotAllowedError" ? "permita a câmera no navegador." : e.message);
+  }
+  liga.disabled = false;
+}
+
+function desligar() {
+  rodando = false;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  video.srcObject = null;
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  liga.textContent = "Ativar câmera";
+  msg.textContent = "Câmera desligada.";
+}
+
+liga.addEventListener("click", () => rodando ? desligar() : ativar());
+fundo.addEventListener("click", () => {
+  const esc = video.classList.toggle("escondido");
+  fundo.textContent = esc ? "Fundo: preto" : "Fundo: câmera";
+});
+</script>
+</body>
+</html>
